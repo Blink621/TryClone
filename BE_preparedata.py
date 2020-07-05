@@ -7,6 +7,11 @@ Created on Fri Jul  3 20:00:25 2020
 """
 import numpy as np
 from dnnbrain.dnn.core import Mask
+from load_data import load_stimuli, load_voxels
+from dnnbrain.dnn.models import AlexNet
+from dnnbrain.brain.core import BrainEncoder
+from dnnbrain.dnn.base import MultivariatePredictionModel
+
 
 def gen_feature(dnn, stimuli, layer, chn='all', mask=None):
     """
@@ -30,8 +35,10 @@ def gen_feature(dnn, stimuli, layer, chn='all', mask=None):
     ---------
     features[list]: length equal to layer num
         each element is a activation ndarray for corresponding layer
+    fmap_num[int]: num of feature map
     """
     # initialize some params
+    fmap_num = 0
     features = []
     dmask = Mask()
     # start computing
@@ -47,6 +54,7 @@ def gen_feature(dnn, stimuli, layer, chn='all', mask=None):
                     varr = np.var(act, axis=0).squeeze()
                     index = np.argsort(-varr)[:1024]
                     act = act[:,index,:,:]
+                fmap_num += act.shape[1]
                 features.append(act)
                 dmask.clear()
     else:
@@ -58,9 +66,10 @@ def gen_feature(dnn, stimuli, layer, chn='all', mask=None):
                 varr = np.var(act, axis=0).squeeze()
                 index = np.argsort(-varr)[:1024]
                 act = act[:,index,:,:]
+            fmap_num += act.shape[1]
             features.append(act)
             dmask.clear()
-    return features
+    return features, fmap_num
 
 def gen_rf(features,x,y,sigma):
     """
@@ -90,11 +99,6 @@ def gen_rf(features,x,y,sigma):
         rfs += [rf,]
     
     return rfs
-
-
-def gen_dataset(fmaps,rfmasks):
-    
-    pass
 
 def gauss(xi,yi,fmap_size, sigma):
     """
@@ -128,7 +132,57 @@ def gauss(xi,yi,fmap_size, sigma):
     return mask
 
 
+#demo 
+# dnn info    
+dnn = AlexNet()
+layer = ['fc1']#, 'conv3', 'conv4', 'conv5']
+chn = 'all'
+mask = {'conv1':'all', 'fc2':'all'}
+file_path = '/nfs/e3/natural_vision/vim1/data_set_vim1/'
 
+#rf info
+x = [-8]#,1]
+y = [-8]#,1]
+sigma = [0.7]#,8]
+
+# get stim data
+stimuli_lowrez, stimuli_hirez, trn_size = load_stimuli(file_path, npx=224, npc=3)
+data_size = len(stimuli_hirez)
+val_size = data_size - trn_size
+trn_stim_data = stimuli_hirez[:trn_size]
+val_stim_data = stimuli_hirez[trn_size:]
+#plt.imshow(stimuli_hirez[0].transpose(1,2,0))
+
+#get voxel data
+subject = 'S1'
+roi_names = ['other', 'V1', 'V2', 'V3', 'V3a', 'V3b', 'V4', 'LO']
+voxel_data, voxel_roi, voxel_idx = load_voxels(file_path, subject, voxel_subset=range(3400, 3402))
+nv = voxel_data.shape[1]
+trn_voxel_data = voxel_data[:trn_size]
+val_voxel_data = voxel_data[trn_size:]
+
+#generate features
+features, fmap_num = gen_feature(dnn, stimuli_hirez, mask)
+
+#generate fe-stim data
+for x_item in x:
+    for y_item in y:
+        for sigma_item in sigma:
+            rfs = gen_rf(features, x_item, y_item, sigma_item)
+            #merge rf and feature            
+            data_all = np.zeros((features[0].shape[0], 1))
+            num = len(rfs)
+            for idx in range(num):
+                data = np.multiply(rfs[idx], features[idx])
+                data = np.sum(data, axis=(2,3)).squeeze()
+                data_all = np.concatenate((data_all, data), axis=1)
+            data_all = np.delete(data_all, 0, axis=1)
+
+# start encoding
+#bren = BrainEncoder(voxel_data, 'mul')
+#encode_info = bren.encode_dnn(data_all)
+mpm = MultivariatePredictionModel('glm')
+encode_info = mpm.predict(data_all, voxel_data)
 
 
 
